@@ -367,11 +367,35 @@ pub async fn claim(scope: Scope, account_id: &str) -> Result<TravelStatus, Strin
     })
 }
 
-pub async fn run_auto_cycle() {
-    let scope = Scope {
+const CLAIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const DEPART_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+fn auto_scope() -> Scope {
+    Scope {
         platform: Platform::Workbuddy,
         region: Region::Cn,
-    };
+    }
+}
+
+/// 领取周期：每 15 分钟检查一次已到达的旅行并领奖。
+pub async fn run_claim_cycle() {
+    let scope = auto_scope();
+    if !auto_enabled(scope) {
+        return;
+    }
+    for account in account::load(scope.as_str()) {
+        let Ok(current) = status(scope, &account.id).await else {
+            continue;
+        };
+        if current.state == "arrived" {
+            let _ = claim(scope, &account.id).await;
+        }
+    }
+}
+
+/// 派发周期：每 30 分钟按官方状态派发；顺手补领已到达的奖励。
+pub async fn run_depart_cycle() {
+    let scope = auto_scope();
     if !auto_enabled(scope) {
         return;
     }
@@ -394,9 +418,14 @@ pub async fn run_auto_cycle() {
 pub fn spawn() {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
+        let mut tick: u64 = 0;
         loop {
-            run_auto_cycle().await;
-            tokio::time::sleep(Duration::from_secs(15 * 60)).await;
+            run_claim_cycle().await;
+            if tick % (DEPART_INTERVAL.as_secs() / CLAIM_INTERVAL.as_secs()) == 0 {
+                run_depart_cycle().await;
+            }
+            tick = tick.wrapping_add(1);
+            tokio::time::sleep(CLAIM_INTERVAL).await;
         }
     });
 }

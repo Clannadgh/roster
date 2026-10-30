@@ -206,7 +206,8 @@ pub fn set_travel_auto(scope: String, enabled: bool) -> Result<bool, String> {
     let value = crate::travel::set_auto(scope, enabled)?;
     if value {
         tauri::async_runtime::spawn(async move {
-            crate::travel::run_auto_cycle().await;
+            crate::travel::run_claim_cycle().await;
+            crate::travel::run_depart_cycle().await;
         });
     }
     Ok(value)
