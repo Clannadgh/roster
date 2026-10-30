@@ -16,6 +16,7 @@ mod secrets;
 mod store;
 mod switch_workbuddy;
 mod trae_switch;
+mod travel;
 
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
@@ -92,6 +93,7 @@ pub fn run() {
         ))
         .setup(|app| {
             schedule::spawn();
+            travel::spawn();
             setup_tray(app)?;
 
             if std::env::args().any(|arg| arg == "--hidden") {
@@ -124,6 +126,11 @@ pub fn run() {
             commands::checkin_account,
             commands::checkin_all,
             commands::get_credits_summary,
+            commands::travel_status,
+            commands::travel_depart,
+            commands::travel_claim,
+            commands::get_travel_auto,
+            commands::set_travel_auto,
             commands::get_schedule,
             commands::save_schedule,
             commands::get_autostart,

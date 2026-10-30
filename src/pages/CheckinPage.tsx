@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import * as api from "@/lib/api";
 import { platformLabel, regionLabel, splitScope } from "@/lib/scope";
-import type { AccountMeta, CheckinStatus, CreditAccount } from "@/lib/types";
+import type { AccountMeta, CheckinStatus, CreditAccount, TravelStatus } from "@/lib/types";
 import { useAccounts } from "@/lib/use-accounts";
 import { useScope } from "@/lib/use-scope";
 
@@ -22,11 +22,14 @@ export default function CheckinPage() {
   const canCheckin = platform !== "workbuddy" || region === "cn";
   const canSwitch = true;
   const canSaveProfile = platform === "trae";
+  const travelCapable = platform === "workbuddy" && region === "cn";
   const { accounts, loading, error, refresh } = useAccounts(scope);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [statuses, setStatuses] = useState<Record<string, CheckinStatus>>({});
   const [credits, setCredits] = useState<Record<string, CreditAccount>>({});
+  const [travelStatuses, setTravelStatuses] = useState<Record<string, TravelStatus>>({});
+  const [travelBusyId, setTravelBusyId] = useState<string | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
 
@@ -85,6 +88,39 @@ export default function CheckinPage() {
   useEffect(() => {
     void loadCredits();
   }, [loadCredits]);
+
+  const loadTravelStatuses = useCallback(async () => {
+    if (!travelCapable || accounts.length === 0) {
+      setTravelStatuses({});
+      return;
+    }
+    const entries = await Promise.all(
+      accounts.map(async (account) => {
+        try {
+          return [account.id, await api.getTravelStatus(scope, account.id)] as const;
+        } catch {
+          return [account.id, null] as const;
+        }
+      }),
+    );
+    const next: Record<string, TravelStatus> = {};
+    for (const [id, status] of entries) {
+      if (status) next[id] = status;
+    }
+    setTravelStatuses(next);
+  }, [accounts, travelCapable, scope]);
+
+  useEffect(() => {
+    void loadTravelStatuses();
+  }, [loadTravelStatuses]);
+
+  useEffect(() => {
+    if (!travelCapable) return;
+    const timer = window.setInterval(() => {
+      void loadTravelStatuses();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [travelCapable, loadTravelStatuses]);
 
   const handleAdded = useCallback(
     (_account: AccountMeta) => {
@@ -164,6 +200,43 @@ export default function CheckinPage() {
 
   const handleDialogChange = useCallback((open: boolean) => setDialogOpen(open), []);
   const openDialog = useCallback(() => setDialogOpen(true), []);
+
+  const handleTravel = useCallback(
+    async (account: AccountMeta) => {
+      const claim = travelStatuses[account.id]?.state === "arrived";
+      setTravelBusyId(account.id);
+      try {
+        const next = claim
+          ? await api.travelClaim(scope, account.id)
+          : await api.travelDepart(scope, account.id);
+        setTravelStatuses((prev) => ({ ...prev, [account.id]: next }));
+        if (claim) {
+          toast.success("旅行奖励已领取", {
+            description:
+              next.rewardCredit !== null ? `+${next.rewardCredit} 积分` : undefined,
+          });
+          void loadCredits();
+        } else if (next.state === "traveling") {
+          toast.success("Buddy 已出发", { description: next.locationName ?? undefined });
+        } else if (next.state === "no_buddy") {
+          toast.info("该账号还没有 Buddy", {
+            description: "先在 WorkBuddy 成长中心领养 Buddy 后再旅行",
+          });
+        } else if (next.state === "unsupported") {
+          toast.info("该账号不支持成长中心", {
+            description: "企业/教育账号没有派猫猫旅行",
+          });
+        } else if (next.dailyLimitReached) {
+          toast.info("今日旅行已完成");
+        }
+      } catch (cause) {
+        toast.error(claim ? "领取失败" : "出发失败", { description: api.asError(cause) });
+      } finally {
+        setTravelBusyId(null);
+      }
+    },
+    [scope, travelStatuses, loadCredits],
+  );
 
   const handleSwitch = useCallback(
     async (account: AccountMeta) => {
@@ -297,6 +370,9 @@ export default function CheckinPage() {
                     key={account.id}
                     account={account}
                     credits={credits[account.id]}
+                    travelStatus={travelCapable ? travelStatuses[account.id] : undefined}
+                    travelBusy={travelBusyId === account.id}
+                    onTravel={handleTravel}
                     onDelete={handleDelete}
                     status={statuses[account.id]}
                     canCheckin={canCheckin}

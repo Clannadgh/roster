@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import type { AccountMeta, CheckinStatus, CreditAccount } from "@/lib/types";
+import type { AccountMeta, CheckinStatus, CreditAccount, TravelStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function displayName(account: AccountMeta): string {
@@ -38,6 +38,61 @@ function formatAmount(value: number): string {
   return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
 
+type TravelView = {
+  badge: string;
+  variant: "secondary" | "success" | "outline" | "warning";
+  detail: string | null;
+  action: "claim" | "depart" | null;
+};
+
+function travelRemaining(arriveAt: number | null): string | null {
+  if (!arriveAt) return null;
+  const diff = arriveAt - Date.now();
+  if (diff <= 0) return "即将到达";
+  const minutes = Math.ceil(diff / 60_000);
+  if (minutes < 60) return `${minutes} 分钟后到达`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0 ? `${hours} 小时 ${rest} 分后到达` : `${hours} 小时后到达`;
+}
+
+function travelView(status: TravelStatus | null | undefined): TravelView | null {
+  if (!status) return null;
+  switch (status.state) {
+    case "traveling":
+      return {
+        badge: "旅行中",
+        variant: "secondary",
+        detail: [status.locationName, travelRemaining(status.arriveAt)]
+          .filter((value): value is string => Boolean(value))
+          .join(" · "),
+        action: null,
+      };
+    case "arrived":
+      return {
+        badge: "已到达",
+        variant: "success",
+        detail: [
+          status.locationName,
+          status.rewardCredit !== null ? `+${formatAmount(status.rewardCredit)} 积分` : null,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(" · "),
+        action: "claim",
+      };
+    case "idle":
+      return status.dailyLimitReached
+        ? { badge: "今日已旅行", variant: "outline", detail: null, action: null }
+        : { badge: "未旅行", variant: "outline", detail: null, action: "depart" };
+    case "no_buddy":
+      return { badge: "无 Buddy", variant: "warning", detail: null, action: null };
+    case "unsupported":
+      return { badge: "不支持旅行", variant: "outline", detail: null, action: null };
+    default:
+      return null;
+  }
+}
+
 function shortDate(millis: number): string {
   const date = new Date(millis);
   return date.toLocaleDateString(
@@ -51,6 +106,9 @@ function shortDate(millis: number): string {
 export function AccountCard({
   account,
   credits,
+  travelStatus,
+  travelBusy = false,
+  onTravel,
   onDelete,
   status,
   canCheckin = false,
@@ -63,6 +121,9 @@ export function AccountCard({
 }: {
   account: AccountMeta;
   credits?: CreditAccount;
+  travelStatus?: TravelStatus | null;
+  travelBusy?: boolean;
+  onTravel?: (account: AccountMeta) => void;
   onDelete: (id: string) => void;
   status?: CheckinStatus | null;
   canCheckin?: boolean;
@@ -79,6 +140,7 @@ export function AccountCard({
     .slice(0, 1)
     .toUpperCase();
   const remaining = credits?.ok ? credits.remaining : null;
+  const travel = travelView(travelStatus);
 
   return (
     <Card
@@ -102,6 +164,28 @@ export function AccountCard({
             ) : null}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle(account)}</div>
+          {travel ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <Badge variant={travel.variant} className="text-[10px]">
+                {travel.badge}
+              </Badge>
+              {travel.detail ? (
+                <span className="truncate text-[11px] text-muted-foreground">{travel.detail}</span>
+              ) : null}
+              {travel.action ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 gap-1 px-1.5 text-[10px]"
+                  disabled={travelBusy}
+                  onClick={() => onTravel?.(account)}
+                >
+                  {travelBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+                  {travel.action === "claim" ? "领奖" : "去旅行"}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           {canSaveProfile ? (

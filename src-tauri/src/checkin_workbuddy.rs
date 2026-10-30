@@ -103,7 +103,7 @@ async fn post_json(url: &str, headers: Vec<(&'static str, String)>) -> Result<Va
     })
 }
 
-fn response_message(response: &Value) -> String {
+pub(crate) fn response_message(response: &Value) -> String {
     response
         .get("message")
         .or_else(|| response.get("msg"))
@@ -112,7 +112,7 @@ fn response_message(response: &Value) -> String {
         .to_string()
 }
 
-fn is_unauthorized(response: &Value) -> bool {
+pub(crate) fn is_unauthorized(response: &Value) -> bool {
     let code = response.get("code").and_then(Value::as_i64).unwrap_or(-1);
     if code == 401 || code == 403 {
         return true;

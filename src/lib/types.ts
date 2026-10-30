@@ -80,3 +80,11 @@ export type CreditsSummary = {
   okAccounts: number;
   failedAccounts: number;
 };
+
+export type TravelStatus = {
+  state: "idle" | "traveling" | "arrived" | "no_buddy" | "unsupported";
+  locationName: string | null;
+  rewardCredit: number | null;
+  arriveAt: number | null;
+  dailyLimitReached: boolean;
+};

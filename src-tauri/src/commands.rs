@@ -164,3 +164,51 @@ pub async fn get_credits_summary(scope: String) -> Result<crate::credits::Credit
     crate::credits::summary(scope).await
 }
 
+#[tauri::command]
+pub async fn travel_status(
+    scope: String,
+    account_id: String,
+) -> Result<crate::travel::TravelStatus, String> {
+    let scope = Scope::parse(&scope)?;
+    crate::travel::status(scope, &account_id).await
+}
+
+#[tauri::command]
+pub async fn travel_depart(
+    scope: String,
+    account_id: String,
+) -> Result<crate::travel::TravelStatus, String> {
+    let scope = Scope::parse(&scope)?;
+    crate::travel::depart(scope, &account_id).await
+}
+
+#[tauri::command]
+pub async fn travel_claim(
+    scope: String,
+    account_id: String,
+) -> Result<crate::travel::TravelStatus, String> {
+    let scope = Scope::parse(&scope)?;
+    crate::travel::claim(scope, &account_id).await
+}
+
+#[tauri::command]
+pub fn get_travel_auto(scope: String) -> Result<bool, String> {
+    let scope = Scope::parse(&scope)?;
+    if scope.platform != Platform::Workbuddy || scope.region != crate::scope::Region::Cn {
+        return Ok(false);
+    }
+    Ok(crate::travel::auto_enabled(scope))
+}
+
+#[tauri::command]
+pub fn set_travel_auto(scope: String, enabled: bool) -> Result<bool, String> {
+    let scope = Scope::parse(&scope)?;
+    let value = crate::travel::set_auto(scope, enabled)?;
+    if value {
+        tauri::async_runtime::spawn(async move {
+            crate::travel::run_auto_cycle().await;
+        });
+    }
+    Ok(value)
+}
+

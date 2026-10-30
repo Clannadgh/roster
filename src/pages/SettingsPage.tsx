@@ -59,6 +59,7 @@ export default function SettingsPage() {
   const scope = useScope();
   const { platform, region } = splitScope(scope);
   const unsupported = platform === "workbuddy" && region === "global";
+  const travelSupported = platform === "workbuddy" && region === "cn";
   const [config, setConfig] = useState<ScheduleConfig>(DEFAULT_SCHEDULE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -66,6 +67,27 @@ export default function SettingsPage() {
   const [newTime, setNewTime] = useState("09:30");
   const [autostart, setAutostartState] = useState<boolean | null>(null);
   const [autostartBusy, setAutostartBusy] = useState(false);
+  const [travelAuto, setTravelAuto] = useState<boolean | null>(null);
+  const [travelAutoBusy, setTravelAutoBusy] = useState(false);
+
+  useEffect(() => {
+    if (!travelSupported) {
+      setTravelAuto(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTravelAuto(scope)
+      .then((value) => {
+        if (!cancelled) setTravelAuto(value);
+      })
+      .catch(() => {
+        if (!cancelled) setTravelAuto(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, travelSupported]);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +195,19 @@ export default function SettingsPage() {
       toast.error("签到失败", { description: api.asError(cause) });
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function toggleTravelAuto(checked: boolean) {
+    setTravelAutoBusy(true);
+    try {
+      const value = await api.setTravelAuto(scope, checked);
+      setTravelAuto(value);
+      toast.success(value ? "自动旅行已开启" : "自动旅行已关闭");
+    } catch (cause) {
+      toast.error("自动旅行设置失败", { description: api.asError(cause) });
+    } finally {
+      setTravelAutoBusy(false);
     }
   }
 
@@ -288,6 +323,24 @@ export default function SettingsPage() {
             </Card>
           )}
         </Section>
+
+        {travelSupported ? (
+          <Section title="WorkBuddy 旅行">
+            <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+              <Row
+                title="启用自动旅行"
+                description="每 15 分钟检查一次：未旅行自动出发，到点自动领取奖励"
+                action={
+                  <Switch
+                    checked={travelAuto === true}
+                    disabled={travelAuto === null || travelAutoBusy}
+                    onCheckedChange={(checked) => void toggleTravelAuto(checked)}
+                  />
+                }
+              />
+            </Card>
+          </Section>
+        ) : null}
 
         <Section title="启动">
           <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">

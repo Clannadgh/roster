@@ -7,6 +7,7 @@ import type {
   LoginPoll,
   LoginStart,
   ScheduleConfig,
+  TravelStatus,
 } from "./types";
 
 export function isTauri(): boolean {
@@ -84,4 +85,24 @@ export function setAutostart(enabled: boolean): Promise<boolean> {
 
 export function getCreditsSummary(scope: string): Promise<CreditsSummary> {
   return call("get_credits_summary", { scope });
+}
+
+export function getTravelStatus(scope: string, accountId: string): Promise<TravelStatus> {
+  return call("travel_status", { scope, accountId });
+}
+
+export function travelDepart(scope: string, accountId: string): Promise<TravelStatus> {
+  return call("travel_depart", { scope, accountId });
+}
+
+export function travelClaim(scope: string, accountId: string): Promise<TravelStatus> {
+  return call("travel_claim", { scope, accountId });
+}
+
+export function getTravelAuto(scope: string): Promise<boolean> {
+  return call("get_travel_auto", { scope });
+}
+
+export function setTravelAuto(scope: string, enabled: boolean): Promise<boolean> {
+  return call("set_travel_auto", { scope, enabled });
 }
