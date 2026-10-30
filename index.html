@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roster</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #ffffff;
+      }
+      .boot {
+        box-sizing: border-box;
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+        color: #71717a;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #1c2333;
+        }
+        .boot {
+          color: #a1a1aa;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div class="boot">Roster</div></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

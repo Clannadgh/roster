@@ -1,0 +1,21 @@
+Roster — 来源与许可说明
+========================
+
+本项目的部分代码与资源派生自以下开源项目：
+
+1. NextAgentX / qoder-trae-workbuddy-switch
+   https://github.com/NextAgentX/qoder-trae-workbuddy-switch
+   许可：PolyForm Noncommercial License 1.0.0
+   Required Notice: Copyright (c) 2026 NextAgentX (https://github.com/NextAgentX/qoder-trae-workbuddy-switch)
+   派生范围：账号/签到/积分/切换等后端逻辑的移植与裁剪。
+
+2. changexbc / workbuddy-switch
+   https://github.com/changexbc/workbuddy-switch
+   许可：MIT License，Copyright (c) 2026 wb-switch
+   派生范围：前端布局、主题令牌、shadcn/Radix 组件与交互参考。
+
+3. 产品名称与图标
+   WorkBuddy、CodeBuddy、TraeWork、Trae、Qoder 的名称与图标归各自权利人所有，
+   本项目仅用于功能识别，不代表任何隶属、授权、赞助或背书关系。
+
+本项目的分发与使用受 LICENSE（PolyForm Noncommercial 1.0.0）约束：仅限个人非商业用途。

@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-*
+target
+src-tauri/target
+src-tauri/gen
+.DS_Store
+*.log
+.vscode/*
+!.vscode/extensions.json
+
+/Roster_*-setup.exe

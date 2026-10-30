@@ -1,0 +1,218 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use chrono::{Local, Timelike};
+use serde::{Deserialize, Serialize};
+
+use crate::checkin_qoder;
+use crate::checkin_trae;
+use crate::checkin_workbuddy;
+use crate::scope::{Platform, Region, Scope};
+use crate::store::{atomic_write, now_ms, store_dir};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub times: Vec<String>,
+    #[serde(default)]
+    pub jitter_minutes: i64,
+    #[serde(default)]
+    pub last_success_date: Option<String>,
+    #[serde(default)]
+    pub last_run_at: Option<i64>,
+    #[serde(default)]
+    pub last_result: Option<String>,
+}
+
+impl Default for ScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            times: vec!["09:30".to_string()],
+            jitter_minutes: 0,
+            last_success_date: None,
+            last_run_at: None,
+            last_result: None,
+        }
+    }
+}
+
+type ScheduleMap = BTreeMap<String, ScheduleConfig>;
+
+fn file() -> PathBuf {
+    store_dir().join("schedules.json")
+}
+
+fn load_all() -> ScheduleMap {
+    let Ok(text) = std::fs::read_to_string(file()) else {
+        return ScheduleMap::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn save_all(map: &ScheduleMap) -> Result<(), String> {
+    let content =
+        serde_json::to_string_pretty(map).map_err(|error| format!("序列化排程失败：{error}"))?;
+    atomic_write(&file(), &content).map_err(|error| format!("保存排程失败：{error}"))
+}
+
+fn parse_hhmm(value: &str) -> Option<(i64, i64)> {
+    let (hour, minute) = value.trim().split_once(':')?;
+    let hour: i64 = hour.parse().ok()?;
+    let minute: i64 = minute.parse().ok()?;
+    (0..=23).contains(&hour).then_some(())?;
+    (0..=59).contains(&minute).then_some(())?;
+    Some((hour, minute))
+}
+
+fn normalize_times(times: &[String]) -> Result<Vec<String>, String> {
+    let mut values: Vec<String> = Vec::new();
+    for time in times {
+        let Some((hour, minute)) = parse_hhmm(time) else {
+            return Err(format!("时间格式不对：{time}（应为 HH:MM）"));
+        };
+        let normalized = format!("{hour:02}:{minute:02}");
+        if !values.contains(&normalized) {
+            values.push(normalized);
+        }
+    }
+    values.sort();
+    if values.is_empty() {
+        return Err("至少需要一个签到时点".to_string());
+    }
+    Ok(values)
+}
+
+pub fn get(scope: Scope) -> ScheduleConfig {
+    load_all()
+        .remove(scope.as_str())
+        .unwrap_or_else(ScheduleConfig::default)
+}
+
+pub fn save(scope: Scope, mut config: ScheduleConfig) -> Result<ScheduleConfig, String> {
+    config.times = normalize_times(&config.times)?;
+    if !(0..=120).contains(&config.jitter_minutes) {
+        return Err("抖动幅度需在 0–120 分钟之间".to_string());
+    }
+    let mut map = load_all();
+    map.insert(scope.as_str().to_string(), config.clone());
+    save_all(&map)?;
+    Ok(config)
+}
+
+fn deterministic_jitter(scope: &str, date: &str, time: &str, jitter: i64) -> i64 {
+    if jitter <= 0 {
+        return 0;
+    }
+    use md5::{Digest, Md5};
+    let mut hasher = Md5::new();
+    hasher.update(format!("{scope}|{date}|{time}").as_bytes());
+    let digest = hasher.finalize();
+    let value = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as i64;
+    value % (2 * jitter + 1) - jitter
+}
+
+fn due_now(config: &ScheduleConfig, scope: &str, now: &chrono::DateTime<Local>) -> bool {
+    let today = now.format("%Y-%m-%d").to_string();
+    let now_minutes = now.hour() as i64 * 60 + now.minute() as i64;
+    config.times.iter().any(|time| {
+        let Some((hour, minute)) = parse_hhmm(time) else {
+            return false;
+        };
+        let offset = deterministic_jitter(scope, &today, time, config.jitter_minutes);
+        let target = hour * 60 + minute + offset;
+        now_minutes >= target
+    })
+}
+
+async fn run_scope(scope: Scope) -> (usize, usize) {    let outcomes = match scope.platform {
+        Platform::Workbuddy => checkin_workbuddy::checkin_all(scope).await,
+        Platform::Qoder => checkin_qoder::checkin_all(scope).await,
+        Platform::Trae => checkin_trae::checkin_all(scope).await,
+    };
+    let succeeded = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome.result.as_str(), "success" | "already"))
+        .count();
+    let failed = outcomes
+        .iter()
+        .filter(|outcome| outcome.result == "error")
+        .count();
+    (succeeded, failed)
+}
+
+async fn tick() {
+    let mut map = load_all();
+    if map.is_empty() {
+        return;
+    }
+    let now = Local::now();
+    let today = now.format("%Y-%m-%d").to_string();
+    let mut changed = false;
+
+    for (scope_key, config) in map.iter_mut() {
+        if !config.enabled {
+            continue;
+        }
+        let Ok(scope) = Scope::parse(scope_key) else {
+            continue;
+        };
+        if scope.platform == Platform::Workbuddy && scope.region == Region::Global {
+            continue;
+        }
+        if config.last_success_date.as_deref() == Some(today.as_str()) {
+            continue;
+        }
+        if !due_now(config, scope_key, &now) {
+            continue;
+        }
+
+        let (succeeded, failed) = run_scope(scope).await;
+        config.last_run_at = Some(now_ms());
+        config.last_result = Some(format!("成功 {succeeded}，失败 {failed}"));
+        if succeeded > 0 {
+            config.last_success_date = Some(today.clone());
+        }
+        changed = true;
+    }
+
+    if changed {
+        let _ = save_all(&map);
+    }
+}
+
+pub fn spawn() {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tick().await;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
+}
+
+pub async fn run_all_scopes() -> (usize, usize) {
+    let scopes = [
+        "workbuddy-cn",
+        "trae-cn",
+        "trae-global",
+        "qoder-cn",
+        "qoder-global",
+    ];
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    for key in scopes {
+        let Ok(scope) = Scope::parse(key) else {
+            continue;
+        };
+        if crate::account::load(key).is_empty() {
+            continue;
+        }
+        let (ok, err) = run_scope(scope).await;
+        succeeded += ok;
+        failed += err;
+    }
+    (succeeded, failed)
+}
