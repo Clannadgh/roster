@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
+use serde_json::Value;
+use sha2::{Digest, Sha512};
+
 use crate::account;
 use crate::scope::{Platform, Region, Scope};
 use crate::store::{home_dir, store_dir};
@@ -58,6 +62,75 @@ fn client_data_dir(region: Region) -> Option<PathBuf> {
         .iter()
         .map(|name| base.join(name))
         .find(|dir| dir.is_dir())
+}
+
+const CLOUDIDE_KEY: &str = "iCubeAuthInfo://icube.cloudide";
+const TC_HEADER: [u8; 6] = [116, 99, 5, 16, 0, 0];
+
+// Trae 客户端 iCube 信封的混淆常量（随安装包分发，非机密）。
+const WOE_T: [u8; 64] = [
+    82, 9, 106, 213, 48, 54, 165, 56, 191, 64, 163, 158, 129, 243, 215, 251, 124, 227, 57, 130,
+    155, 47, 255, 135, 52, 142, 67, 68, 196, 222, 233, 203, 84, 123, 148, 50, 166, 194, 35, 61,
+    238, 76, 149, 11, 66, 250, 195, 78, 8, 46, 161, 102, 40, 217, 36, 178, 118, 91, 162, 73, 109,
+    139, 209, 37,
+];
+const VOE_T: [u8; 64] = [
+    31, 221, 168, 51, 136, 7, 199, 49, 177, 18, 16, 89, 39, 128, 236, 95, 96, 81, 127, 169, 25,
+    181, 74, 13, 45, 229, 122, 159, 147, 201, 156, 239, 160, 224, 59, 77, 174, 42, 245, 176, 200,
+    235, 187, 60, 131, 83, 153, 97, 23, 43, 4, 126, 186, 119, 214, 38, 225, 105, 20, 99, 85, 33,
+    12, 125,
+];
+
+fn tc_decrypt(envelope: &str) -> Option<String> {
+    use aes::Aes128;
+    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(envelope.trim())
+        .ok()?;
+    if raw.len() < TC_HEADER.len() + 32 + 16 || raw[..TC_HEADER.len()] != TC_HEADER {
+        return None;
+    }
+    let random = &raw[TC_HEADER.len()..TC_HEADER.len() + 32];
+    let ciphertext = &raw[TC_HEADER.len() + 32..];
+
+    let mut pepper = [0u8; 64];
+    for index in 0..64 {
+        pepper[index] = WOE_T[index] ^ VOE_T[index];
+    }
+    let mut joined = Vec::with_capacity(128);
+    joined.extend_from_slice(&Sha512::digest(random));
+    joined.extend_from_slice(&pepper);
+    let digest = Sha512::digest(&joined);
+
+    let decryptor = cbc::Decryptor::<Aes128>::new(digest[..16].into(), digest[16..32].into());
+    let padded = decryptor.decrypt_padded_vec_mut::<Pkcs7>(ciphertext).ok()?;
+    if padded.len() <= 64 {
+        return None;
+    }
+    let (tag, body) = padded.split_at(64);
+    if Sha512::digest(body)[..] != *tag {
+        return None;
+    }
+    String::from_utf8(body.to_vec()).ok()
+}
+
+/// 读取 Trae 客户端当前登录的用户 ID；客户端未安装、未登录或信封无法解密时返回 None。
+pub fn current_uid(region: Region) -> Option<String> {
+    let storage = client_data_dir(region)?.join("User/globalStorage/storage.json");
+    let text = std::fs::read_to_string(storage).ok()?;
+    let json: Value = serde_json::from_str(&text).ok()?;
+    let plain = tc_decrypt(json.get(CLOUDIDE_KEY)?.as_str()?)?;
+    let session: Value = serde_json::from_str(&plain).ok()?;
+    session
+        .get("userId")
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value.as_i64().map(|number| number.to_string()))
+        })
+        .filter(|uid| !uid.trim().is_empty())
 }
 
 fn running() -> bool {
@@ -224,3 +297,4 @@ pub fn switch(scope: Scope, account_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
+

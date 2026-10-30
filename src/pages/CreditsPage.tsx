@@ -185,7 +185,11 @@ export default function CreditsPage() {
                       {account.error
                         ? account.error
                         : account.expiresAt
-                          ? `最近到期：${new Date(account.expiresAt).toLocaleDateString("zh-CN")}`
+                          ? `最近到期：${new Date(account.expiresAt).toLocaleDateString("zh-CN")}${
+                              account.expiring !== null
+                                ? `（${formatAmount(account.expiring)} 积分）`
+                                : ""
+                            }`
                           : "—"}
                     </div>
                   </div>

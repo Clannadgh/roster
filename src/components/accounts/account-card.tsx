@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import type { AccountMeta, CheckinStatus } from "@/lib/types";
+import type { AccountMeta, CheckinStatus, CreditAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function displayName(account: AccountMeta): string {
@@ -34,8 +34,23 @@ function expiryText(account: AccountMeta): string {
   return `凭据有效期至 ${new Date(account.expiresAt).toLocaleDateString("zh-CN")}`;
 }
 
+function formatAmount(value: number): string {
+  return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function shortDate(millis: number): string {
+  const date = new Date(millis);
+  return date.toLocaleDateString(
+    "zh-CN",
+    date.getFullYear() === new Date().getFullYear()
+      ? { month: "2-digit", day: "2-digit" }
+      : { year: "numeric", month: "2-digit", day: "2-digit" },
+  );
+}
+
 export function AccountCard({
   account,
+  credits,
   onDelete,
   status,
   canCheckin = false,
@@ -47,6 +62,7 @@ export function AccountCard({
   onSaveProfile,
 }: {
   account: AccountMeta;
+  credits?: CreditAccount;
   onDelete: (id: string) => void;
   status?: CheckinStatus | null;
   canCheckin?: boolean;
@@ -62,6 +78,7 @@ export function AccountCard({
   const initial = (account.email || account.nickname || account.uid || "?")
     .slice(0, 1)
     .toUpperCase();
+  const remaining = credits?.ok ? credits.remaining : null;
 
   return (
     <Card
@@ -110,9 +127,31 @@ export function AccountCard({
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-4 py-2.5">
-        <span className="truncate text-[11px] tabular-nums text-muted-foreground">
-          {expiryText(account)}
-        </span>
+        <div className="min-w-0 space-y-0.5" title={expiryText(account)}>
+          {remaining !== null && remaining !== undefined ? (
+            <div className="truncate text-[12px] leading-4 tabular-nums text-muted-foreground">
+              积分 <span className="font-medium text-foreground">{formatAmount(remaining)}</span>
+              {credits?.total !== null && credits?.total !== undefined ? (
+                <span> / {formatAmount(credits.total)}</span>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              className="truncate text-[11px] leading-4 text-muted-foreground"
+              title={credits?.error ?? undefined}
+            >
+              {credits?.error ? "积分读取失败" : expiryText(account)}
+            </div>
+          )}
+          {remaining !== null &&
+          remaining !== undefined &&
+          credits?.expiresAt &&
+          credits.expiring !== null ? (
+            <div className="truncate text-[11px] leading-4 tabular-nums text-amber-600 dark:text-amber-400">
+              {formatAmount(credits.expiring)} 积分 {shortDate(credits.expiresAt)} 到期
+            </div>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {status?.ok ? (
             <Badge variant={status.todayCheckedIn ? "success" : "outline"}>

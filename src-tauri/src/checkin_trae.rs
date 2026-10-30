@@ -144,9 +144,34 @@ pub(crate) async fn post(
 
 pub(crate) fn parse_json(status: u16, body: &str) -> Result<Value, String> {
     serde_json::from_str(body).map_err(|_| {
+        if body.trim_start().starts_with('<') {
+            return format!("HTTP {status}：接口返回了网页而不是数据，通常说明国内/国际版选错了");
+        }
         let snippet: String = body.chars().take(200).collect();
         format!("HTTP {status}：{snippet}")
     })
+}
+
+/// 导入前校验 JWT：当前区域能通过状态接口才允许保存账号。
+pub(crate) async fn validate_import(scope: Scope, account: &Account) -> Result<(), String> {
+    match probe(scope, account).await {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let other_region = match scope.region {
+                Region::Cn => Region::Global,
+                Region::Global => Region::Cn,
+            };
+            let other = Scope {
+                platform: scope.platform,
+                region: other_region,
+            };
+            if probe(other, account).await.is_ok() {
+                let label = if other_region == Region::Cn { "国内版" } else { "国际版" };
+                return Err(format!("这个 JWT 属于 Trae {label}，请切换到「{label}」后再导入"));
+            }
+            Err(format!("JWT 未通过 Trae 服务端校验：{error}"))
+        }
+    }
 }
 
 struct Probe {
@@ -244,3 +269,4 @@ pub async fn checkin_all(scope: Scope) -> Vec<CheckinOutcome> {
     }
     results
 }
+

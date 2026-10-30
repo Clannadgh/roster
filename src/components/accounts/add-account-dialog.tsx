@@ -167,12 +167,13 @@ export function AddAccountDialog({
         </DialogHeader>
 
         {isTrae ? (
-          <div className="space-y-3 py-1">
+          <div className="min-w-0 space-y-3 py-1">
             <Textarea
               value={jwtText}
               onChange={(event) => setJwtText(event.target.value)}
               placeholder="粘贴 Cloud-IDE-JWT ...（可带前缀，也可只贴裸 token）"
-              className="min-h-[120px] font-mono text-xs"
+              wrap="soft"
+              className="max-h-[40vh] min-h-[120px] max-w-full min-w-0 font-mono text-xs break-all"
             />
             <Button
               className="w-full"

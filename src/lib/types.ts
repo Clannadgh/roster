@@ -59,6 +59,7 @@ export type CreditAccount = {
   total: number | null;
   today: number | null;
   expiresAt: number | null;
+  expiring: number | null;
   plan: string | null;
   error: string | null;
 };

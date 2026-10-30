@@ -12,10 +12,31 @@ use crate::scope::{Platform, Scope};
 pub fn list_accounts(scope: String) -> Result<Vec<AccountMeta>, String> {
     let scope = Scope::parse(&scope)?;
     let mut metas = account::list_meta(scope.as_str());
-    if scope.platform == Platform::Workbuddy {
-        if let Some(uid) = crate::switch_workbuddy::current_uid(scope.region) {
-            for meta in &mut metas {
-                meta.is_current = meta.uid.as_deref() == Some(uid.as_str()) || meta.id == uid;
+    match scope.platform {
+        Platform::Workbuddy => {
+            if let Some(uid) = crate::switch_workbuddy::current_uid(scope.region) {
+                for meta in &mut metas {
+                    meta.is_current = meta.uid.as_deref() == Some(uid.as_str()) || meta.id == uid;
+                }
+            }
+        }
+        Platform::Qoder => {
+            if let Some(identity) = crate::qoder_switch::current_identity(scope.region) {
+                let current: Vec<String> = account::load(scope.as_str())
+                    .iter()
+                    .filter(|account| identity.matches(account))
+                    .map(|account| account.id.clone())
+                    .collect();
+                for meta in &mut metas {
+                    meta.is_current = current.contains(&meta.id);
+                }
+            }
+        }
+        Platform::Trae => {
+            if let Some(uid) = crate::trae_switch::current_uid(scope.region) {
+                for meta in &mut metas {
+                    meta.is_current = meta.uid.as_deref() == Some(uid.as_str()) || meta.id == uid;
+                }
             }
         }
     }
@@ -43,12 +64,12 @@ pub async fn login_poll(scope: String, login_id: String) -> Result<serde_json::V
 }
 
 #[tauri::command]
-pub fn import_trae_jwt(scope: String, jwt: String) -> Result<AccountMeta, String> {
+pub async fn import_trae_jwt(scope: String, jwt: String) -> Result<AccountMeta, String> {
     let scope = Scope::parse(&scope)?;
     if scope.platform != Platform::Trae {
         return Err("该命令仅用于 Trae".to_string());
     }
-    login_trae::import_jwt(scope, &jwt)
+    login_trae::import_jwt(scope, &jwt).await
 }
 
 #[tauri::command]

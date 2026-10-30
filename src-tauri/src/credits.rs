@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -23,6 +23,7 @@ pub struct CreditAccount {
     pub total: Option<f64>,
     pub today: Option<f64>,
     pub expires_at: Option<i64>,
+    pub expiring: Option<f64>,
     pub plan: Option<String>,
     pub error: Option<String>,
 }
@@ -64,10 +65,40 @@ impl CreditAccount {
             total: None,
             today: None,
             expires_at: None,
+            expiring: None,
             plan: None,
             error: None,
         }
     }
+}
+
+/// 按到期日合并剩余积分，返回最近一天 `(毫秒时间戳, 该天到期的积分)`。
+fn nearest_expiring(
+    entries: impl Iterator<Item = (f64, Option<i64>)>,
+) -> Option<(i64, f64)> {
+    let mut grouped: BTreeMap<NaiveDate, (i64, f64)> = BTreeMap::new();
+    for (amount, expire_at) in entries {
+        if amount <= 0.0 {
+            continue;
+        }
+        let Some(ms) = expire_at else {
+            continue;
+        };
+        let Some(date) = Local
+            .timestamp_millis_opt(ms)
+            .single()
+            .map(|when| when.date_naive())
+        else {
+            continue;
+        };
+        let slot = grouped.entry(date).or_insert((ms, 0.0));
+        slot.0 = slot.0.min(ms);
+        slot.1 += amount;
+    }
+    grouped
+        .into_iter()
+        .next()
+        .map(|(_, (ms, amount))| (ms, amount))
 }
 
 fn display_message(response: &Value) -> String {
@@ -297,7 +328,10 @@ fn package_entry(item: &Value, now: i64) -> Option<(Option<String>, f64, f64, Op
     Some((code, total, remaining, expire_at))
 }
 
-async fn wb_balance(scope: Scope, account: &Account) -> Result<(f64, f64, Option<i64>), String> {
+async fn wb_balance(
+    scope: Scope,
+    account: &Account,
+) -> Result<(f64, f64, Option<i64>, Option<f64>), String> {
     let endpoint = resource_endpoint(scope, account);
     let summary_url = format!("{endpoint}/billing/meter/get-user-resource-summary");
     let paid_url = format!("{endpoint}/billing/meter/get-user-resource-paid-packages");
@@ -393,7 +427,9 @@ async fn wb_balance(scope: Scope, account: &Account) -> Result<(f64, f64, Option
     let remaining: f64 = entries.iter().map(|entry| entry.2).sum();
     let total: f64 = entries.iter().map(|entry| entry.1).sum();
     let expires_at = entries.iter().filter_map(|entry| entry.3).min();
-    Ok((remaining, total, expires_at))
+    let expiring = nearest_expiring(entries.iter().map(|entry| (entry.2, entry.3)))
+        .map(|(_, amount)| amount);
+    Ok((remaining, total, expires_at, expiring))
 }
 
 fn official_usage_url(scope: Scope) -> String {
@@ -540,11 +576,12 @@ async fn wb_summary(scope: Scope) -> Result<CreditsSummary, String> {
         let mut row = CreditAccount::new(&account);
         let mut errors = Vec::new();
         match wb_balance(scope, &account).await {
-            Ok((remaining, total, expires_at)) => {
+            Ok((remaining, total, expires_at, expiring)) => {
                 row.ok = true;
                 row.remaining = Some(remaining);
                 row.total = Some(total);
                 row.expires_at = expires_at;
+                row.expiring = expiring;
                 total_remaining += remaining;
             }
             Err(error) => errors.push(error),
@@ -653,7 +690,10 @@ fn snapshot_series(
     (daily, today_by_uid, day, week, month)
 }
 
-async fn trae_balance(scope: Scope, account: &Account) -> Result<f64, String> {
+async fn trae_balance(
+    scope: Scope,
+    account: &Account,
+) -> Result<(f64, f64, Option<i64>, Option<f64>), String> {
     let (status, body) = checkin_trae::post(scope, "/trae/api/v2/pay/ide_user_ent_usage", account).await?;
     let payload = checkin_trae::parse_json(status, &body)?;
     let packs = payload
@@ -661,6 +701,8 @@ async fn trae_balance(scope: Scope, account: &Account) -> Result<f64, String> {
         .and_then(Value::as_array)
         .ok_or_else(|| "响应中缺少 user_entitlement_pack_list".to_string())?;
     let mut remaining = 0.0;
+    let mut total = 0.0;
+    let mut expiries: Vec<(f64, Option<i64>)> = Vec::new();
     for pack in packs {
         let limit = pack
             .get("entitlement_base_info")
@@ -675,9 +717,28 @@ async fn trae_balance(scope: Scope, account: &Account) -> Result<f64, String> {
             .and_then(|value| value.get("credits_amount"))
             .and_then(as_f64)
             .unwrap_or(0.0);
-        remaining += (limit - used).max(0.0);
+        let left = (limit - used).max(0.0);
+        remaining += left;
+        total += limit;
+        let expire = pack
+            .get("expire_time")
+            .and_then(Value::as_i64)
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| seconds * 1000);
+        expiries.push((left, expire));
     }
-    Ok(remaining)
+    if total == 0.0 {
+        total = payload
+            .get("usage_summary")
+            .and_then(|value| value.get("total_amount"))
+            .and_then(as_f64)
+            .unwrap_or(0.0);
+    }
+    let (expires_at, expiring) = match nearest_expiring(expiries.into_iter()) {
+        Some((ms, amount)) => (Some(ms), Some(amount)),
+        None => (None, None),
+    };
+    Ok((remaining, total, expires_at, expiring))
 }
 
 async fn trae_summary(scope: Scope) -> Result<CreditsSummary, String> {
@@ -688,9 +749,12 @@ async fn trae_summary(scope: Scope) -> Result<CreditsSummary, String> {
     for account in accounts {
         let mut row = CreditAccount::new(&account);
         match trae_balance(scope, &account).await {
-            Ok(remaining) => {
+            Ok((remaining, total, expires_at, expiring)) => {
                 row.ok = true;
                 row.remaining = Some(remaining);
+                row.total = Some(total);
+                row.expires_at = expires_at;
+                row.expiring = expiring;
                 if !row.uid.is_empty() {
                     remaining_map.insert(row.uid.clone(), remaining);
                 }
@@ -750,7 +814,7 @@ async fn qoder_get(scope: Scope, account: &Account, path: &str) -> Result<Value,
 async fn qoder_balance(
     scope: Scope,
     account: &Account,
-) -> Result<(f64, f64, Option<String>), String> {
+) -> Result<(f64, f64, Option<String>, Option<i64>, Option<f64>), String> {
     let quota = qoder_get(scope, account, "/api/v2/quota/usage").await?;
     let user = quota.get("userQuota");
     let addon = quota.get("addOnQuota");
@@ -772,7 +836,9 @@ async fn qoder_balance(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
-    Ok((remaining.max(0.0), total.max(0.0), plan))
+    let expires_at = first_timestamp(&quota, &["expiresAt", "expireAt", "expiredAt"]);
+    let expiring = expires_at.map(|_| remaining.max(0.0));
+    Ok((remaining.max(0.0), total.max(0.0), plan, expires_at, expiring))
 }
 
 async fn qoder_summary(scope: Scope) -> Result<CreditsSummary, String> {
@@ -783,11 +849,13 @@ async fn qoder_summary(scope: Scope) -> Result<CreditsSummary, String> {
     for account in accounts {
         let mut row = CreditAccount::new(&account);
         match qoder_balance(scope, &account).await {
-            Ok((remaining, total, plan)) => {
+            Ok((remaining, total, plan, expires_at, expiring)) => {
                 row.ok = true;
                 row.remaining = Some(remaining);
                 row.total = Some(total);
                 row.plan = plan;
+                row.expires_at = expires_at;
+                row.expiring = expiring;
                 if !row.uid.is_empty() {
                     remaining_map.insert(row.uid.clone(), remaining);
                 }
@@ -826,3 +894,6 @@ pub async fn summary(scope: Scope) -> Result<CreditsSummary, String> {    match 
         Platform::Qoder => qoder_summary(scope).await,
     }
 }
+
+
+

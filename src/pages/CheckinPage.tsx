@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import * as api from "@/lib/api";
 import { platformLabel, regionLabel, splitScope } from "@/lib/scope";
-import type { AccountMeta, CheckinStatus } from "@/lib/types";
+import type { AccountMeta, CheckinStatus, CreditAccount } from "@/lib/types";
 import { useAccounts } from "@/lib/use-accounts";
 import { useScope } from "@/lib/use-scope";
 
@@ -26,6 +26,7 @@ export default function CheckinPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [statuses, setStatuses] = useState<Record<string, CheckinStatus>>({});
+  const [credits, setCredits] = useState<Record<string, CreditAccount>>({});
   const [checkingId, setCheckingId] = useState<string | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
 
@@ -63,6 +64,27 @@ export default function CheckinPage() {
   useEffect(() => {
     void loadStatuses();
   }, [loadStatuses]);
+
+  const loadCredits = useCallback(async () => {
+    if (accounts.length === 0) {
+      setCredits({});
+      return;
+    }
+    try {
+      const summary = await api.getCreditsSummary(scope);
+      const next: Record<string, CreditAccount> = {};
+      for (const item of summary.accounts) {
+        next[item.accountId] = item;
+      }
+      setCredits(next);
+    } catch {
+      setCredits({});
+    }
+  }, [accounts.length, scope]);
+
+  useEffect(() => {
+    void loadCredits();
+  }, [loadCredits]);
 
   const handleAdded = useCallback(
     (_account: AccountMeta) => {
@@ -107,6 +129,7 @@ export default function CheckinPage() {
           } catch {
             // 状态刷新失败不影响签到结果。
           }
+          void loadCredits();
         }
       } catch (cause) {
         toast.error("签到失败", { description: api.asError(cause) });
@@ -114,7 +137,7 @@ export default function CheckinPage() {
         setCheckingId(null);
       }
     },
-    [scope],
+    [scope, loadCredits],
   );
 
   const handleCheckinAll = useCallback(async () => {
@@ -131,12 +154,13 @@ export default function CheckinPage() {
         toast.success("签到完成", { description: summary });
       }
       await loadStatuses();
+      void loadCredits();
     } catch (cause) {
       toast.error("一键签到失败", { description: api.asError(cause) });
     } finally {
       setCheckingAll(false);
     }
-  }, [scope, loadStatuses]);
+  }, [scope, loadStatuses, loadCredits]);
 
   const handleDialogChange = useCallback((open: boolean) => setDialogOpen(open), []);
   const openDialog = useCallback(() => setDialogOpen(true), []);
@@ -272,6 +296,7 @@ export default function CheckinPage() {
                   <AccountCard
                     key={account.id}
                     account={account}
+                    credits={credits[account.id]}
                     onDelete={handleDelete}
                     status={statuses[account.id]}
                     canCheckin={canCheckin}

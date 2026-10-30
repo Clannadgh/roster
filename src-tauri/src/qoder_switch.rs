@@ -80,6 +80,45 @@ fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
+pub struct Identity {
+    pub uid: Option<String>,
+    pub token: Option<String>,
+}
+
+impl Identity {
+    pub fn matches(&self, account: &Account) -> bool {
+        let uid_match = self
+            .uid
+            .as_deref()
+            .zip(account.uid.as_deref())
+            .map(|(current, stored)| current == stored)
+            .unwrap_or(false);
+        uid_match
+            || self
+                .token
+                .as_deref()
+                .map(|current| current == account.access_token)
+                .unwrap_or(false)
+    }
+}
+
+/// 读取 Qoder 桌面版当前登录态；客户端未安装、未登录或无法解密时返回 None。
+pub fn current_identity(region: Region) -> Option<Identity> {
+    let auth_path = app_dir(region).join("auth.v1.dat");
+    let key = encryption_key(region).ok()?;
+    let plaintext = decrypt(&key, &std::fs::read(auth_path).ok()?).ok()?;
+    let json: Value = serde_json::from_slice(&plaintext).ok()?;
+    Some(Identity {
+        uid: json
+            .pointer("/user/id")
+            .or_else(|| json.get("user_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        token: token_of(&json),
+    })
+}
+
 fn token_of(json: &Value) -> Option<String> {
     ["token", "accessToken", "access_token"]
         .iter()

@@ -5,7 +5,7 @@ use crate::account::{self, Account, AccountMeta};
 use crate::scope::{Region, Scope};
 use crate::store::now_ms;
 
-pub fn import_jwt(scope: Scope, raw: &str) -> Result<AccountMeta, String> {
+pub async fn import_jwt(scope: Scope, raw: &str) -> Result<AccountMeta, String> {
     let trimmed = raw.trim();
     let token = trimmed
         .strip_prefix("Cloud-IDE-JWT ")
@@ -76,5 +76,7 @@ pub fn import_jwt(scope: Scope, raw: &str) -> Result<AccountMeta, String> {
         profile_raw: data,
     };
 
+    crate::checkin_trae::validate_import(scope, &account).await?;
     account::upsert(scope.as_str(), account).map(|saved| saved.meta())
 }
+
