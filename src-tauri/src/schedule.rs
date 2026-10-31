@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use chrono::{Local, Timelike};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,9 @@ impl Default for ScheduleConfig {
 }
 
 type ScheduleMap = BTreeMap<String, ScheduleConfig>;
+
+// 设置页会自动保存，后台排程也会写同一个文件；写入必须串行，避免旧快照覆盖新配置。
+static STORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn file() -> PathBuf {
     store_dir().join("schedules.json")
@@ -97,7 +101,13 @@ pub fn save(scope: Scope, mut config: ScheduleConfig) -> Result<ScheduleConfig, 
     if !(0..=120).contains(&config.jitter_minutes) {
         return Err("抖动幅度需在 0–120 分钟之间".to_string());
     }
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut map = load_all();
+    if let Some(existing) = map.get(scope.as_str()) {
+        config.last_success_date = existing.last_success_date.clone();
+        config.last_run_at = existing.last_run_at;
+        config.last_result = existing.last_result.clone();
+    }
     map.insert(scope.as_str().to_string(), config.clone());
     save_all(&map)?;
     Ok(config)
@@ -128,7 +138,8 @@ fn due_now(config: &ScheduleConfig, scope: &str, now: &chrono::DateTime<Local>) 
     })
 }
 
-async fn run_scope(scope: Scope) -> (usize, usize) {    let outcomes = match scope.platform {
+async fn run_scope(scope: Scope) -> (usize, usize) {
+    let outcomes = match scope.platform {
         Platform::Workbuddy => checkin_workbuddy::checkin_all(scope).await,
         Platform::Qoder => checkin_qoder::checkin_all(scope).await,
         Platform::Trae => checkin_trae::checkin_all(scope).await,
@@ -145,15 +156,15 @@ async fn run_scope(scope: Scope) -> (usize, usize) {    let outcomes = match sco
 }
 
 async fn tick() {
-    let mut map = load_all();
+    let map = load_all();
     if map.is_empty() {
         return;
     }
     let now = Local::now();
     let today = now.format("%Y-%m-%d").to_string();
-    let mut changed = false;
+    let mut updates: Vec<(String, i64, String, Option<String>)> = Vec::new();
 
-    for (scope_key, config) in map.iter_mut() {
+    for (scope_key, config) in map.iter() {
         if !config.enabled {
             continue;
         }
@@ -171,17 +182,31 @@ async fn tick() {
         }
 
         let (succeeded, failed) = run_scope(scope).await;
-        config.last_run_at = Some(now_ms());
-        config.last_result = Some(format!("成功 {succeeded}，失败 {failed}"));
-        if succeeded > 0 {
-            config.last_success_date = Some(today.clone());
-        }
-        changed = true;
+        updates.push((
+            scope_key.clone(),
+            now_ms(),
+            format!("成功 {succeeded}，失败 {failed}"),
+            (succeeded > 0).then(|| today.clone()),
+        ));
     }
 
-    if changed {
-        let _ = save_all(&map);
+    if updates.is_empty() {
+        return;
     }
+
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let mut latest = load_all();
+    for (key, run_at, result, success_date) in updates {
+        let Some(config) = latest.get_mut(&key) else {
+            continue;
+        };
+        config.last_run_at = Some(run_at);
+        config.last_result = Some(result);
+        if success_date.is_some() {
+            config.last_success_date = success_date;
+        }
+    }
+    let _ = save_all(&latest);
 }
 
 pub fn spawn() {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -63,6 +63,7 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<ScheduleConfig>(DEFAULT_SCHEDULE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const saveToken = useRef(0);
   const [running, setRunning] = useState(false);
   const [newTime, setNewTime] = useState("09:30");
   const [autostart, setAutostartState] = useState<boolean | null>(null);
@@ -128,6 +129,8 @@ export default function SettingsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    saveToken.current += 1;
+    setSaving(false);
     setLoading(true);
     api
       .getSchedule(scope)
@@ -147,33 +150,49 @@ export default function SettingsPage() {
     };
   }, [scope]);
 
+  async function persist(next: ScheduleConfig) {
+    const previous = config;
+    const token = ++saveToken.current;
+    setConfig(next);
+    setSaving(true);
+    try {
+      const saved = await api.saveSchedule(scope, next);
+      if (token !== saveToken.current) return;
+      setConfig(saved);
+      if (saved.enabled !== previous.enabled) {
+        toast.success(saved.enabled ? "自动签到已开启" : "自动签到已关闭");
+      }
+    } catch (cause) {
+      if (token !== saveToken.current) return;
+      setConfig(previous);
+      toast.error("保存排程失败", { description: api.asError(cause) });
+    } finally {
+      if (token === saveToken.current) setSaving(false);
+    }
+  }
+
+  function applySchedule(patch: Partial<ScheduleConfig>) {
+    void persist({ ...config, ...patch });
+  }
+
   function addTime() {
     if (!parseTime(newTime)) {
       toast.error("时间格式不对", { description: "请使用 HH:MM，例如 09:30" });
       return;
     }
     if (config.times.includes(newTime)) return;
-    setConfig((prev) => ({
-      ...prev,
-      times: [...prev.times, newTime].sort(),
-    }));
+    void persist({
+      ...config,
+      times: [...config.times, newTime].sort(),
+    });
   }
 
   function removeTime(time: string) {
-    setConfig((prev) => ({ ...prev, times: prev.times.filter((value) => value !== time) }));
-  }
-
-  async function save() {
-    setSaving(true);
-    try {
-      const saved = await api.saveSchedule(scope, config);
-      setConfig(saved);
-      toast.success("排程已保存");
-    } catch (cause) {
-      toast.error("保存排程失败", { description: api.asError(cause) });
-    } finally {
-      setSaving(false);
+    if (config.times.length <= 1) {
+      toast.error("至少保留一个签到时点");
+      return;
     }
+    void persist({ ...config, times: config.times.filter((value) => value !== time) });
   }
 
   async function runNow() {
@@ -228,14 +247,12 @@ export default function SettingsPage() {
             <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
               <Row
                 title="启用自动签到"
-                description="需保持本应用运行；错过时点会在启动后补签"
+                description="更改即时生效；需保持本应用运行，错过时点会在启动后补签"
                 action={
                   <Switch
                     checked={config.enabled}
                     disabled={loading}
-                    onCheckedChange={(checked) =>
-                      setConfig((prev) => ({ ...prev, enabled: checked }))
-                    }
+                    onCheckedChange={(checked) => applySchedule({ enabled: checked })}
                   />
                 }
               />
@@ -250,8 +267,9 @@ export default function SettingsPage() {
                         {time}
                         <button
                           type="button"
-                          className="rounded-full p-0.5 hover:bg-foreground/10"
+                          className="rounded-full p-0.5 hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
                           onClick={() => removeTime(time)}
+                          disabled={loading || config.times.length <= 1}
                           aria-label={`删除 ${time}`}
                         >
                           <X className="size-3" />
@@ -265,9 +283,16 @@ export default function SettingsPage() {
                     type="time"
                     value={newTime}
                     onChange={(event) => setNewTime(event.target.value)}
+                    disabled={loading}
                     className="h-8 w-[120px] text-xs"
                   />
-                  <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={addTime}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1 text-xs"
+                    disabled={loading}
+                    onClick={addTime}
+                  >
                     <Plus className="size-3.5" />
                     添加时点
                   </Button>
@@ -279,8 +304,9 @@ export default function SettingsPage() {
                 action={
                   <Select
                     value={String(config.jitterMinutes)}
+                    disabled={loading}
                     onValueChange={(value) =>
-                      setConfig((prev) => ({ ...prev, jitterMinutes: Number(value) }))
+                      applySchedule({ jitterMinutes: Number(value) })
                     }
                   >
                     <SelectTrigger className="h-8 w-[120px] text-xs">
@@ -304,7 +330,10 @@ export default function SettingsPage() {
                 }
                 action={<Badge variant="outline">{config.lastSuccessDate ?? "未成功"}</Badge>}
               />
-              <div className="flex items-center justify-end gap-2 px-4 py-3">
+              <div className="flex items-center justify-end gap-3 px-4 py-3">
+                {saving ? (
+                  <span className="text-[11px] text-muted-foreground">保存中…</span>
+                ) : null}
                 <Button
                   size="sm"
                   variant="outline"
@@ -314,10 +343,6 @@ export default function SettingsPage() {
                 >
                   {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   立即签到
-                </Button>
-                <Button size="sm" className="gap-1.5" disabled={saving} onClick={() => void save()}>
-                  {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  保存排程
                 </Button>
               </div>
             </Card>
@@ -329,7 +354,7 @@ export default function SettingsPage() {
             <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
               <Row
                 title="启用自动旅行"
-                description="按官方状态自动派发或领取：每 15 分钟检查领奖，每 30 分钟检查出发"
+                description="到达后自动领取奖励；每 30 分钟检查一次出发"
                 action={
                   <Switch
                     checked={travelAuto === true}
