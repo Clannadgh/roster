@@ -228,6 +228,9 @@ fn credit_items(items: Vec<CampaignItem>) -> Vec<CampaignItem> {
 pub async fn status(scope: Scope, account_id: &str) -> Result<CheckinStatus, String> {
     let account = account::find(scope.as_str(), account_id)
         .ok_or_else(|| "账号不存在".to_string())?;
+    if let Some(status) = crate::checkin_marks::cached_status(scope, account_id) {
+        return Ok(status);
+    }
     let payload = fetch_campaigns(scope, &account).await?;
     let credits = credit_items(parse_items(&payload));
     if credits.is_empty() {
@@ -255,9 +258,14 @@ pub async fn status(scope: Scope, account_id: &str) -> Result<CheckinStatus, Str
         }
     }
 
+    let today_checked_in = claimable_count == 0;
+    if today_checked_in {
+        crate::checkin_marks::mark_signed(scope, account_id);
+    }
+
     Ok(CheckinStatus {
         ok: true,
-        today_checked_in: claimable_count == 0,
+        today_checked_in,
         daily_credit: (claimable_reward > 0.0).then_some(claimable_reward),
         today_credit: (claimable_count == 0 && claimed_reward > 0.0).then_some(claimed_reward),
         streak_days: None,
@@ -376,6 +384,7 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         .cloned()
         .collect();
     if claimable.is_empty() {
+        crate::checkin_marks::mark_signed(scope, account_id);
         return outcome("already", None, None);
     }
 
@@ -416,6 +425,10 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         )
     };
 
+    if matches!(result, "success" | "already") {
+        crate::checkin_marks::mark_signed(scope, account_id);
+    }
+
     let outcome = outcome(result, amount, error);
     crate::checkin_workbuddy::append_log(scope, &account, &outcome);
     outcome
@@ -424,6 +437,10 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
 pub async fn checkin_all(scope: Scope) -> Vec<CheckinOutcome> {
     let mut results = Vec::new();
     for account in account::load(scope.as_str()) {
+        if let Some(outcome) = crate::checkin_marks::skipped_outcome(scope, &account.id) {
+            results.push(outcome);
+            continue;
+        }
         results.push(checkin(scope, &account.id).await);
     }
     results

@@ -89,6 +89,15 @@ export default function CheckinPage() {
     void loadCredits();
   }, [loadCredits]);
 
+  useEffect(() => {
+    const handler = () => {
+      void loadStatuses();
+      void loadCredits();
+    };
+    window.addEventListener("roster:checkin-all", handler);
+    return () => window.removeEventListener("roster:checkin-all", handler);
+  }, [loadStatuses, loadCredits]);
+
   const loadTravelStatuses = useCallback(async () => {
     if (!travelCapable || accounts.length === 0) {
       setTravelStatuses({});

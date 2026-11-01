@@ -1,4 +1,5 @@
 mod account;
+mod checkin_marks;
 mod checkin_qoder;
 mod checkin_trae;
 mod checkin_workbuddy;
@@ -85,6 +86,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if !argv.iter().any(|arg| arg == "--hidden") {
+                show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -125,6 +131,7 @@ pub fn run() {
             commands::checkin_status,
             commands::checkin_account,
             commands::checkin_all,
+            commands::checkin_all_scopes,
             commands::get_credits_summary,
             commands::travel_status,
             commands::travel_depart,

@@ -205,7 +205,13 @@ async fn probe(scope: Scope, account: &Account) -> Result<Probe, String> {
 pub async fn status(scope: Scope, account_id: &str) -> Result<CheckinStatus, String> {
     let account = account::find(scope.as_str(), account_id)
         .ok_or_else(|| "账号不存在".to_string())?;
+    if let Some(status) = crate::checkin_marks::cached_status(scope, account_id) {
+        return Ok(status);
+    }
     let probe = probe(scope, &account).await?;
+    if probe.checked_in {
+        crate::checkin_marks::mark_signed(scope, account_id);
+    }
     Ok(CheckinStatus {
         ok: true,
         today_checked_in: probe.checked_in,
@@ -234,6 +240,7 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         Err(error) => return outcome("error", None, Some(error)),
     };
     if probe.checked_in {
+        crate::checkin_marks::mark_signed(scope, account_id);
         return outcome("already", None, None);
     }
 
@@ -257,6 +264,7 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         return outcome;
     }
 
+    crate::checkin_marks::mark_signed(scope, account_id);
     let outcome = outcome("success", probe.credits, None);
     crate::checkin_workbuddy::append_log(scope, &account, &outcome);
     outcome
@@ -265,6 +273,10 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
 pub async fn checkin_all(scope: Scope) -> Vec<CheckinOutcome> {
     let mut results = Vec::new();
     for account in account::load(scope.as_str()) {
+        if let Some(outcome) = crate::checkin_marks::skipped_outcome(scope, &account.id) {
+            results.push(outcome);
+            continue;
+        }
         results.push(checkin(scope, &account.id).await);
     }
     results

@@ -218,26 +218,75 @@ pub fn spawn() {
     });
 }
 
-pub async fn run_all_scopes() -> (usize, usize) {
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeCheckinSummary {
+    pub scope: String,
+    pub success: usize,
+    pub already: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalCheckinSummary {
+    pub success: usize,
+    pub already: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub scopes: Vec<ScopeCheckinSummary>,
+}
+
+pub async fn run_all_scopes_summary() -> GlobalCheckinSummary {
     let scopes = [
         "workbuddy-cn",
+        "workbuddy-global",
         "trae-cn",
         "trae-global",
         "qoder-cn",
         "qoder-global",
     ];
-    let mut succeeded = 0usize;
-    let mut failed = 0usize;
+    let mut summary = GlobalCheckinSummary::default();
     for key in scopes {
         let Ok(scope) = Scope::parse(key) else {
             continue;
         };
-        if crate::account::load(key).is_empty() {
+        let account_count = crate::account::load(key).len();
+        if account_count == 0 {
             continue;
         }
-        let (ok, err) = run_scope(scope).await;
-        succeeded += ok;
-        failed += err;
+        let mut row = ScopeCheckinSummary {
+            scope: key.to_string(),
+            ..ScopeCheckinSummary::default()
+        };
+        if scope.platform == Platform::Workbuddy && scope.region == Region::Global {
+            row.skipped = account_count;
+        } else {
+            let outcomes = match scope.platform {
+                Platform::Workbuddy => checkin_workbuddy::checkin_all(scope).await,
+                Platform::Qoder => checkin_qoder::checkin_all(scope).await,
+                Platform::Trae => checkin_trae::checkin_all(scope).await,
+            };
+            for outcome in outcomes {
+                match outcome.result.as_str() {
+                    "success" => row.success += 1,
+                    "already" => row.already += 1,
+                    "unsupported" => row.skipped += 1,
+                    _ => row.failed += 1,
+                }
+            }
+        }
+        summary.success += row.success;
+        summary.already += row.already;
+        summary.failed += row.failed;
+        summary.skipped += row.skipped;
+        summary.scopes.push(row);
     }
-    (succeeded, failed)
+    summary
+}
+
+pub async fn run_all_scopes() -> (usize, usize) {
+    let summary = run_all_scopes_summary().await;
+    (summary.success + summary.already, summary.failed)
 }

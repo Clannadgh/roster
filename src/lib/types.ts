@@ -41,6 +41,22 @@ export type CheckinOutcome = {
   error: string | null;
 };
 
+export type ScopeCheckinSummary = {
+  scope: string;
+  success: number;
+  already: number;
+  failed: number;
+  skipped: number;
+};
+
+export type GlobalCheckinSummary = {
+  success: number;
+  already: number;
+  failed: number;
+  skipped: number;
+  scopes: ScopeCheckinSummary[];
+};
+
 export type ScheduleConfig = {
   enabled: boolean;
   times: string[];

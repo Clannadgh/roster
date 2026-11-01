@@ -354,7 +354,7 @@ export default function SettingsPage() {
             <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
               <Row
                 title="启用自动旅行"
-                description="到达后自动领取奖励；每 30 分钟检查一次出发"
+                description="按官方状态自动派发或领取：每 15 分钟检查领奖，每 30 分钟检查出发"
                 action={
                   <Switch
                     checked={travelAuto === true}

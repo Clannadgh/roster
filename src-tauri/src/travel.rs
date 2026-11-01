@@ -367,8 +367,7 @@ pub async fn claim(scope: Scope, account_id: &str) -> Result<TravelStatus, Strin
     })
 }
 
-const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
-const TRAVEL_POLL_INTERVAL: Duration = Duration::from_secs(60);
+const CLAIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const DEPART_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 fn auto_scope() -> Scope {
@@ -378,38 +377,28 @@ fn auto_scope() -> Scope {
     }
 }
 
-/// 领取检查：已到达的立即领奖；返回是否还有旅行在进行中。
-pub async fn run_claim_cycle() -> bool {
+/// 领取周期：每 15 分钟检查一次已到达的旅行并领奖。
+pub async fn run_claim_cycle() {
     let scope = auto_scope();
     if !auto_enabled(scope) {
-        return false;
+        return;
     }
-    let mut active = false;
     for account in account::load(scope.as_str()) {
         let Ok(current) = status(scope, &account.id).await else {
             continue;
         };
-        match current.state.as_str() {
-            "arrived" => {
-                let _ = claim(scope, &account.id).await;
-                active = true;
-            }
-            "traveling" => {
-                active = true;
-            }
-            _ => {}
+        if current.state == "arrived" {
+            let _ = claim(scope, &account.id).await;
         }
     }
-    active
 }
 
 /// 派发周期：每 30 分钟按官方状态派发；顺手补领已到达的奖励。
-pub async fn run_depart_cycle() -> bool {
+pub async fn run_depart_cycle() {
     let scope = auto_scope();
     if !auto_enabled(scope) {
-        return false;
+        return;
     }
-    let mut departed = false;
     for account in account::load(scope.as_str()) {
         let Ok(current) = status(scope, &account.id).await else {
             continue;
@@ -419,40 +408,24 @@ pub async fn run_depart_cycle() -> bool {
                 let _ = claim(scope, &account.id).await;
             }
             "idle" if !current.daily_limit_reached => {
-                if let Ok(next) = depart(scope, &account.id).await {
-                    if next.state == "traveling" {
-                        departed = true;
-                    }
-                }
+                let _ = depart(scope, &account.id).await;
             }
             _ => {}
         }
     }
-    departed
 }
 
 pub fn spawn() {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
-        let mut next_depart = std::time::Instant::now();
+        let mut tick: u64 = 0;
         loop {
-            let active = run_claim_cycle().await;
-            let now = std::time::Instant::now();
-            if now >= next_depart {
-                let departed = run_depart_cycle().await;
-                next_depart = now + DEPART_INTERVAL;
-                if departed {
-                    // 刚派发的新旅程，立即复查一次状态，之后进入旅行中的快速轮询。
-                    continue;
-                }
+            run_claim_cycle().await;
+            if tick % (DEPART_INTERVAL.as_secs() / CLAIM_INTERVAL.as_secs()) == 0 {
+                run_depart_cycle().await;
             }
-            let wait = if active {
-                TRAVEL_POLL_INTERVAL
-            } else {
-                IDLE_POLL_INTERVAL
-            };
-            let until_depart = next_depart.saturating_duration_since(std::time::Instant::now());
-            tokio::time::sleep(wait.min(until_depart)).await;
+            tick = tick.wrapping_add(1);
+            tokio::time::sleep(CLAIM_INTERVAL).await;
         }
     });
 }

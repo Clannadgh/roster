@@ -4,6 +4,7 @@ import type {
   CheckinOutcome,
   CheckinStatus,
   CreditsSummary,
+  GlobalCheckinSummary,
   LoginPoll,
   LoginStart,
   ScheduleConfig,
@@ -65,6 +66,10 @@ export function checkinAccount(scope: string, accountId: string): Promise<Checki
 
 export function checkinAll(scope: string): Promise<CheckinOutcome[]> {
   return call("checkin_all", { scope });
+}
+
+export function checkinAllScopes(): Promise<GlobalCheckinSummary> {
+  return call("checkin_all_scopes", {});
 }
 
 export function getSchedule(scope: string): Promise<ScheduleConfig> {

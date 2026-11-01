@@ -159,6 +159,11 @@ pub async fn checkin_all(scope: String) -> Result<Vec<CheckinOutcome>, String> {
 }
 
 #[tauri::command]
+pub async fn checkin_all_scopes() -> crate::schedule::GlobalCheckinSummary {
+    crate::schedule::run_all_scopes_summary().await
+}
+
+#[tauri::command]
 pub async fn get_credits_summary(scope: String) -> Result<crate::credits::CreditsSummary, String> {
     let scope = Scope::parse(&scope)?;
     crate::credits::summary(scope).await

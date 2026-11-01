@@ -197,6 +197,9 @@ async fn status_for(scope: Scope, account_id: &str) -> Result<(CheckinStatus, Ac
     }
     let mut account = account::find(scope.as_str(), account_id)
         .ok_or_else(|| "账号不存在".to_string())?;
+    if let Some(status) = crate::checkin_marks::cached_status(scope, account_id) {
+        return Ok((status, account));
+    }
 
     let url = format!("{}{API_PREFIX}/checkin-activity-status", scope.billing_base());
     let mut response = post_json(&url, auth_headers(&account)).await?;
@@ -206,6 +209,9 @@ async fn status_for(scope: Scope, account_id: &str) -> Result<(CheckinStatus, Ac
     }
 
     if let Some(status) = normalize_status(&response) {
+        if status.today_checked_in {
+            crate::checkin_marks::mark_signed(scope, account_id);
+        }
         return Ok((status, account));
     }
 
@@ -216,6 +222,9 @@ async fn status_for(scope: Scope, account_id: &str) -> Result<(CheckinStatus, Ac
         second = post_json(&fallback, auth_headers(&account)).await?;
     }
     if let Some(status) = normalize_status(&second) {
+        if status.today_checked_in {
+            crate::checkin_marks::mark_signed(scope, account_id);
+        }
         return Ok((status, account));
     }
 
@@ -297,6 +306,7 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         );
     }
     if status.today_checked_in {
+        crate::checkin_marks::mark_signed(scope, account_id);
         return outcome("already", None, None);
     }
 
@@ -315,6 +325,8 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         ("success", None)
     } else if message.contains("已签到") || message.to_lowercase().contains("repeat") {
         ("already", None)
+    } else if message.contains("企业账号") && message.contains("不支持") {
+        ("unsupported", Some(message))
     } else {
         let error = if message.is_empty() {
             format!("code={code}")
@@ -323,6 +335,10 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
         };
         ("error", Some(error))
     };
+
+    if matches!(result, "success" | "already") {
+        crate::checkin_marks::mark_signed(scope, account_id);
+    }
 
     let outcome = outcome(
         result,
@@ -336,6 +352,10 @@ pub async fn checkin(scope: Scope, account_id: &str) -> CheckinOutcome {
 pub async fn checkin_all(scope: Scope) -> Vec<CheckinOutcome> {
     let mut results = Vec::new();
     for account in account::load(scope.as_str()) {
+        if let Some(outcome) = crate::checkin_marks::skipped_outcome(scope, &account.id) {
+            results.push(outcome);
+            continue;
+        }
         results.push(checkin(scope, &account.id).await);
     }
     results
